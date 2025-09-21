@@ -11,6 +11,8 @@ import textwrap
 
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
@@ -39,6 +41,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 import statsmodels.api as sm
 from joblib import dump
+import traceback
 
 # -----------------------------------------------------------------------------
 # Configuración global y constantes
@@ -95,6 +98,21 @@ def ensure_directories() -> None:
 def safe_strip(series: pd.Series) -> pd.Series:
     """Aplica strip a series de texto manejando valores nulos."""
     return series.astype(str).str.strip().replace({"nan": np.nan, "None": np.nan})
+
+
+def sanitize_filename(name: str) -> str:
+    """Convierte cualquier texto en un nombre de archivo seguro.
+
+    - Reemplaza espacios por guiones bajos.
+    - Elimina caracteres no permitidos en nombres de archivo de Windows: \/:*?"<>|
+    """
+    if name is None:
+        return ""
+    s = str(name)
+    s = s.replace(" ", "_")
+    # Quitar caracteres inválidos para nombres de archivos en Windows
+    s = re.sub(r"[\\/:*?\"<>|]", "", s)
+    return s
 
 
 def parse_duration_string(value: Optional[str]) -> Tuple[Optional[float], Optional[float]]:
@@ -336,7 +354,7 @@ def eda(df: pd.DataFrame) -> Dict[str, List[str]]:
         sns.histplot(data, kde=True, ax=ax, color="#1f77b4")
         ax.set_title(f"Histograma de {col}")
         ax.set_xlabel(col)
-        hist_path = os.path.join(RESULTS_DIR, f"hist_{col.replace(' ', '_')}.png")
+        hist_path = os.path.join(RESULTS_DIR, f"hist_{sanitize_filename(col)}.png")
         fig.tight_layout()
         fig.savefig(hist_path, dpi=PLOT_DPI)
         outputs["figures"].append(hist_path)
@@ -346,7 +364,7 @@ def eda(df: pd.DataFrame) -> Dict[str, List[str]]:
         sns.boxplot(x=data, ax=ax, color="#ff7f0e")
         ax.set_title(f"Boxplot de {col}")
         ax.set_xlabel(col)
-        box_path = os.path.join(RESULTS_DIR, f"boxplot_{col.replace(' ', '_')}.png")
+        box_path = os.path.join(RESULTS_DIR, f"boxplot_{sanitize_filename(col)}.png")
         fig.tight_layout()
         fig.savefig(box_path, dpi=PLOT_DPI)
         outputs["figures"].append(box_path)
@@ -361,7 +379,7 @@ def eda(df: pd.DataFrame) -> Dict[str, List[str]]:
         ax.set_ylabel(col)
         for container in ax.containers:
             ax.bar_label(container, fmt="%d")
-        cat_path = os.path.join(RESULTS_DIR, f"categoricas_barras_{col.replace(' ', '_')}.png")
+        cat_path = os.path.join(RESULTS_DIR, f"categoricas_barras_{sanitize_filename(col)}.png")
         fig.tight_layout()
         fig.savefig(cat_path, dpi=PLOT_DPI)
         outputs["figures"].append(cat_path)
@@ -442,7 +460,7 @@ def normalidad(df: pd.DataFrame, numeric_cols: List[str]) -> Dict[str, List[str]
     fig, ax = plt.subplots(figsize=(6, 6))
     stats.probplot(data, dist="norm", plot=ax)
     ax.set_title(f"Q-Q plot para {target_var}")
-    qq_path = os.path.join(RESULTS_DIR, f"qqplot_{target_var.replace(' ', '_')}.png")
+    qq_path = os.path.join(RESULTS_DIR, f"qqplot_{sanitize_filename(target_var)}.png")
     fig.tight_layout()
     fig.savefig(qq_path, dpi=PLOT_DPI)
     outputs["figures"].append(qq_path)
@@ -464,7 +482,7 @@ def normalidad(df: pd.DataFrame, numeric_cols: List[str]) -> Dict[str, List[str]
         f"n: {len(data)}\n"
         f"Conclusión: {'No se rechaza' if p_value > 0.05 else 'Se rechaza'} la normalidad al 5%."
     )
-    txt_path = os.path.join(RESULTS_DIR, f"normalidad_{target_var.replace(' ', '_')}.txt")
+    txt_path = os.path.join(RESULTS_DIR, f"normalidad_{sanitize_filename(target_var)}.txt")
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(summary_text)
     outputs["normalidad_text"] = txt_path
@@ -651,19 +669,26 @@ def modelar_modelo1(
 
     X_train_processed = pipeline.named_steps["preprocessor"].transform(X_train)
     X_test_processed = pipeline.named_steps["preprocessor"].transform(X_test)
+    # Convertir a denso para compatibilidad con statsmodels (evita ambigüedad booleana en matrices dispersas)
+    if hasattr(X_train_processed, "toarray"):
+        X_train_processed = X_train_processed.toarray()
+    if hasattr(X_test_processed, "toarray"):
+        X_test_processed = X_test_processed.toarray()
     feature_names = pipeline.named_steps["preprocessor"].get_feature_names_out()
 
     if problem_type == "regression":
         y_pred = pipeline.predict(X_test)
-        rmse = mean_squared_error(y_test, y_pred, squared=False)
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = float(np.sqrt(mse))
         r2 = r2_score(y_test, y_pred)
         mae = mean_absolute_error(y_test, y_pred)
         bias = float(np.mean(y_pred - y_test))
         metrics_model = {"RMSE": rmse, "R2": r2, "MAE": mae, "Bias": bias}
 
         baseline_pred = np.full(len(y_test), fill_value=y_train.mean(), dtype=float)
+        mse_base = mean_squared_error(y_test, baseline_pred)
         metrics_baseline = {
-            "RMSE": mean_squared_error(y_test, baseline_pred, squared=False),
+            "RMSE": float(np.sqrt(mse_base)),
             "R2": r2_score(y_test, baseline_pred),
             "MAE": mean_absolute_error(y_test, baseline_pred),
             "Bias": float(np.mean(baseline_pred - y_test)),
@@ -781,6 +806,11 @@ def modelar_modelo2(
     feature_names = preprocessor.get_feature_names_out()
     X_train_processed = preprocessor.transform(X_train)
     X_test_processed = preprocessor.transform(X_test)
+    # A denso para statsmodels
+    if hasattr(X_train_processed, "toarray"):
+        X_train_processed = X_train_processed.toarray()
+    if hasattr(X_test_processed, "toarray"):
+        X_test_processed = X_test_processed.toarray()
 
     if problem_type == "regression":
         estimator = LinearRegression()
@@ -820,7 +850,8 @@ def modelar_modelo2(
 
     if problem_type == "regression":
         y_pred = pipeline.predict(X_test)
-        rmse = mean_squared_error(y_test, y_pred, squared=False)
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = float(np.sqrt(mse))
         r2 = r2_score(y_test, y_pred)
         mae = mean_absolute_error(y_test, y_pred)
         bias = float(np.mean(y_pred - y_test))
@@ -849,7 +880,7 @@ def modelar_modelo2(
             "Recall": recall_score(y_test, y_pred, pos_label=positive_class, zero_division=0),
             "F1": f1_score(y_test, y_pred, pos_label=positive_class, zero_division=0),
             "ROC_AUC": roc_auc_score((y_test == positive_class).astype(int), y_proba)
-            if y.nunique() == 2
+            if y_test.nunique() == 2
             else np.nan,
         }
         sm_model = sm.Logit(
@@ -1144,6 +1175,23 @@ def generar_reporte_pdf(
         pdf.savefig(fig)
         plt.close(fig)
 
+    def _format_metrics(metrics: Dict[str, object]) -> str:
+        parts: List[str] = []
+        for k, v in metrics.items():
+            try:
+                if v is None:
+                    continue
+                # Intentar convertir a float; descartar arreglos/listas/Series
+                if isinstance(v, (list, np.ndarray, pd.Series)):
+                    continue
+                vf = float(v)
+                if np.isnan(vf):
+                    continue
+                parts.append(f"{k}: {vf:.3f}")
+            except Exception:
+                continue
+        return ", ".join(parts)
+
     with PdfPages(report_path) as pdf:
         # Portada
         fig, ax = plt.subplots(figsize=(8.27, 11.69))
@@ -1198,8 +1246,8 @@ def generar_reporte_pdf(
         add_text_page(pdf, "Análisis PCA", pca_summary)
 
         # Modelos
-        model1_metrics = ", ".join(f"{k}: {v:.3f}" for k, v in modelo1["metrics"].items() if pd.notna(v))
-        model2_metrics = ", ".join(f"{k}: {v:.3f}" for k, v in modelo2["metrics"].items() if pd.notna(v))
+        model1_metrics = _format_metrics(modelo1["metrics"]) if "metrics" in modelo1 else ""
+        model2_metrics = _format_metrics(modelo2["metrics"]) if "metrics" in modelo2 else ""
         add_text_page(
             pdf,
             "Modelo 1",
@@ -1279,17 +1327,26 @@ def generar_reporte_pdf(
 def main() -> None:
     """Punto de entrada principal del script."""
     try:
+        print("[STEP] ensure_directories")
         ensure_directories()
+        print("[STEP] cargar_datos")
         df_raw = cargar_datos(INPUT_CSV)
+        print("[STEP] limpiar_y_enriquecer")
         df_clean = limpiar_y_enriquecer(df_raw)
 
+        print("[STEP] eda")
         eda_outputs = eda(df_clean)
+        print("[STEP] normalidad")
         normal_outputs = normalidad(df_clean, eda_outputs.get("numeric_cols", []))
+        print("[STEP] pca_analysis")
         pca_outputs = pca_analysis(df_clean, eda_outputs.get("numeric_cols", []))
 
+        print("[STEP] preparar_datos_modelado")
         X, y, numeric_features, categorical_features, target_col, problem_type = preparar_datos_modelado(df_clean)
+        print("[STEP] dividir_datos")
         X_train, X_test, y_train, y_test = dividir_datos(X, y, problem_type)
 
+        print("[STEP] modelar_modelo1")
         modelo1 = modelar_modelo1(
             X_train,
             X_test,
@@ -1299,6 +1356,7 @@ def main() -> None:
             categorical_features,
             problem_type,
         )
+        print("[STEP] modelar_modelo2")
         modelo2 = modelar_modelo2(
             X_train,
             X_test,
@@ -1308,8 +1366,9 @@ def main() -> None:
             categorical_features,
             problem_type,
         )
-
+        print("[STEP] comparar_modelos")
         comparacion = comparar_modelos(problem_type, modelo1["baseline_metrics"], modelo1, modelo2)
+        print("[STEP] generar_conclusiones")
         conclusiones_path = generar_conclusiones(
             df_clean,
             eda_outputs.get("correlation_pairs", pd.DataFrame()),
@@ -1317,6 +1376,7 @@ def main() -> None:
             modelo1,
             modelo2,
         )
+        print("[STEP] generar_reporte_pdf")
         generar_reporte_pdf(
             df_clean,
             eda_outputs,
@@ -1331,6 +1391,14 @@ def main() -> None:
         print("Flujo completo finalizado con éxito.")
     except Exception as exc:  # noqa: BLE001
         print(f"Error en la ejecución: {exc}")
+        try:
+            error_path = os.path.join(RESULTS_DIR, "error_trace.txt")
+            with open(error_path, "w", encoding="utf-8") as f:
+                traceback.print_exc(file=f)
+            print(f"Traceback completo en: {error_path}")
+        except Exception:
+            pass
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

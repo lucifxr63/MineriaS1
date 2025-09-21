@@ -1,0 +1,6 @@
+Prueba de normalidad: Shapiro-Wilk
+Variable: Velocidad km/h
+Estadístico: 0.9715
+p-valor: 0.0000
+n: 3520
+Conclusión: Se rechaza la normalidad al 5%.

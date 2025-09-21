@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "z:\DEV\Respos\Universidad\mineria\MineriaS1\pipeline_congestion.py", line 1338, in main
+    modelo1 = modelar_modelo1(
+  File "z:\DEV\Respos\Universidad\mineria\MineriaS1\pipeline_congestion.py", line 690, in modelar_modelo1
+    sm_model = sm.OLS(y_train, sm.add_constant(X_train_processed, has_constant="add")).fit()
+  File "Z:\DEV\Respos\Universidad\mineria\MineriaS1\.venv\lib\site-packages\statsmodels\tools\tools.py", line 196, in add_constant
+    is_nonzero_const &= np.all(x != 0.0, axis=0)
+  File "Z:\DEV\Respos\Universidad\mineria\MineriaS1\.venv\lib\site-packages\scipy\sparse\_base.py", line 417, in __bool__
+    raise ValueError("The truth value of an array with more than one "
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all().
