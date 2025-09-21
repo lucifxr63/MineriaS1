@@ -48,29 +48,35 @@ pip install numpy scipy scikit-learn pandas matplotlib seaborn statsmodels
 
 ## Ejecución
 
-Con el entorno activado, ejecutar el script principal:
+Con el entorno activado, ejecutar el script principal. Por defecto consume `congestion_Santiago_14-03-2025 (1) (1).csv`, pero puedes modificar los parámetros desde la línea de comandos:
 
 ```powershell
-python .\pipeline_congestion.py
+python .\pipeline_congestion.py \
+  --input "./congestion_Santiago_14-03-2025 (1) (1).csv" \
+  --target "Velocidad km/h" \
+  --test-size 0.2 \
+  --seed 42 \
+  --task auto \
+  --results-dir ./resultados \
+  --models-dir ./modelos
 ```
+
+Los flags son opcionales; si no se indican se usan los valores por defecto. Están disponibles opciones adicionales como `--rare-threshold`, `--min-rare-count` y `--top-categories` para ajustar el agrupamiento de categorías antes del `OneHotEncoder`.
 
 ## Entradas y salidas
 
-- Entrada por defecto: `./congestion_Santiago_14-03-2025 (1) (1).csv` (configurable editando `INPUT_CSV` en `pipeline_congestion.py`).
+- Entrada por defecto: `./congestion_Santiago_14-03-2025 (1) (1).csv` (puedes sobreescribirla con `--input`).
 - Salidas generadas:
-  - Carpeta `resultados/`: imágenes (png), tablas (csv), textos (txt) y `reporte.pdf`.
+  - Carpeta `resultados/`: imágenes (png), tablas (csv), textos (txt), `reporte.pdf` y `error_trace.txt` si ocurre alguna excepción.
   - Carpeta `modelos/`: artefactos de modelos entrenados (`modelo1.pkl`, `modelo2.pkl`).
 
 ## Problemas y avisos conocidos
 
-- **Avisos de seaborn sobre `palette` sin `hue`**: son deprecations que no afectan el resultado actual. Se pueden ajustar las llamadas a `sns.barplot()` para silenciarlos.
-- **Aviso de pandas por `fillna(..., inplace=True)` en encadenamiento**: es un `FutureWarning`. El cálculo se realiza, pero se recomienda reemplazar por asignaciones sin `inplace` para futuras versiones.
-- **Matrices dispersas en statsmodels**: se convirtió explícitamente a denso antes de llamar a `statsmodels` para evitar el error “The truth value of an array is ambiguous”. Esto ya está corregido en el código.
-- **Backend gráfico**: se fuerza `matplotlib.use("Agg")` para evitar dependencias de GUI (Tcl/Tk) en ejecución por consola y prevenir errores al cerrar figuras.
-- **Categorías desconocidas en OneHotEncoder**: se notifica con `UserWarning`, pero está configurado `handle_unknown="ignore"` y no interrumpe la ejecución.
+- **Backend gráfico**: se mantiene `matplotlib.use("Agg")` para evitar dependencias de GUI en entornos sin servidor X.
+- **Control de warnings**: se agrupan categorías raras antes del `OneHotEncoder` y se emplea un filtrado granular del aviso “Found unknown categories”; el pipeline no debería emitir `FutureWarning` de pandas ni de seaborn.
 - **Versionado de Python**: se usa Python 3.10 en `.venv/` para maximizar la compatibilidad (especialmente con scikit-learn).
 
-Si ocurre alguna excepción, el script intenta escribir el traceback completo en `resultados/error_trace.txt` para facilitar el diagnóstico.
+Ante cualquier error no controlado se captura el traceback completo en `resultados/error_trace.txt` para facilitar el diagnóstico.
 
 ## Estructura del proyecto (resumen)
 
