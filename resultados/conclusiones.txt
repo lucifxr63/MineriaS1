@@ -1,0 +1,29 @@
+Hallazgos:
+- Modelo 1 resalta a cat__ID_La Reina-171 con coeficiente 10.501 (p=nan).
+- Modelo 1 resalta a cat__ID_Maipú-315 con coeficiente -10.487 (p=nan).
+- Modelo 1 resalta a cat__Calle_Autopista Vespucio Norte con coeficiente -10.487 (p=nan).
+- Modelo 1 resalta a cat__ID_Santiago-77 con coeficiente -10.053 (p=nan).
+- Modelo 1 resalta a cat__ID_Providencia-428 con coeficiente -9.934 (p=nan).
+- Modelo 2 identifica a cat__Calle_Padre Mariano con coeficiente -10.774 (p=0.000).
+- Modelo 2 identifica a cat__Calle_Ricardo Wagner con coeficiente -9.880 (p=0.000).
+- Modelo 2 identifica a cat__Calle_Av. Egaña con coeficiente -7.571 (p=0.000).
+- Modelo 2 identifica a cat__Calle_"Av. OHiggins" con coeficiente -7.526 (p=0.000).
+- Modelo 2 identifica a cat__Calle_San Pedro con coeficiente -5.655 (p=0.000).
+- Correlación destacada entre duracion_horas y duracion_min: 1.00.
+- Correlación destacada entre hora_inicio_num y hora_fin_num: 0.97.
+- Correlación destacada entre Ranking Regional y Largo km: -0.69.
+- Correlación destacada entre Ranking Regional y duracion_min: -0.54.
+- Correlación destacada entre Ranking Regional y duracion_horas: -0.54.
+- Velocidad promedio en periodo Punta: 17.64 km/h.
+- Velocidad promedio en periodo Valle: 18.16 km/h.
+- La comuna con menor velocidad promedio es Pudahuel (15.37 km/h).
+
+Limitaciones:
+- Existen valores faltantes en Calle (39).
+- Los modelos lineales pueden no capturar relaciones no lineales o interacciones complejas.
+- No se incorporaron variables externas (clima, eventos), lo que puede limitar la generalización.
+
+Recomendaciones:
+- Incorporar nuevas variables temporales (día de la semana, festivos) y condiciones climáticas.
+- Explorar modelos no lineales (árboles, gradient boosting) y validación temporal/espacial.
+- Realizar seguimiento continuo y recalibración con datos más recientes para capturar cambios de movilidad.
