@@ -1,10 +1,14 @@
 Traceback (most recent call last):
-  File "z:\DEV\Respos\Universidad\mineria\MineriaS1\pipeline_congestion.py", line 1338, in main
-    modelo1 = modelar_modelo1(
-  File "z:\DEV\Respos\Universidad\mineria\MineriaS1\pipeline_congestion.py", line 690, in modelar_modelo1
-    sm_model = sm.OLS(y_train, sm.add_constant(X_train_processed, has_constant="add")).fit()
-  File "Z:\DEV\Respos\Universidad\mineria\MineriaS1\.venv\lib\site-packages\statsmodels\tools\tools.py", line 196, in add_constant
-    is_nonzero_const &= np.all(x != 0.0, axis=0)
-  File "Z:\DEV\Respos\Universidad\mineria\MineriaS1\.venv\lib\site-packages\scipy\sparse\_base.py", line 417, in __bool__
-    raise ValueError("The truth value of an array with more than one "
-ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all().
+  File "z:\DEV\Respos\Universidad\mineria\MineriaS1\pipeline_congestion.py", line 1798, in main
+    modelo1 = run_stage(
+  File "z:\DEV\Respos\Universidad\mineria\MineriaS1\pipeline_congestion.py", line 201, in run_stage
+    result = func(*args, **kwargs)
+  File "z:\DEV\Respos\Universidad\mineria\MineriaS1\pipeline_congestion.py", line 1037, in modelar_modelo1
+    feature_names = pipeline.named_steps["preprocessor"].get_feature_names_out()
+  File "Z:\DEV\Respos\Universidad\mineria\MineriaS1\.venv\lib\site-packages\sklearn\compose\_column_transformer.py", line 633, in get_feature_names_out
+    feature_names_out = self._get_feature_name_out_for_transformer(
+  File "Z:\DEV\Respos\Universidad\mineria\MineriaS1\.venv\lib\site-packages\sklearn\compose\_column_transformer.py", line 600, in _get_feature_name_out_for_transformer
+    return trans.get_feature_names_out(names)
+  File "Z:\DEV\Respos\Universidad\mineria\MineriaS1\.venv\lib\site-packages\sklearn\pipeline.py", line 1266, in get_feature_names_out
+    raise AttributeError(
+AttributeError: Estimator rare does not provide get_feature_names_out. Did you mean to call pipeline[:-1].get_feature_names_out()?

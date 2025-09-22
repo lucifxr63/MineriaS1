@@ -1,14 +1,14 @@
 Hallazgos:
-- Modelo 1 resalta a cat__ID_La Reina-171 con coeficiente 10.501 (p=nan).
-- Modelo 1 resalta a cat__ID_Maipú-315 con coeficiente -10.487 (p=nan).
-- Modelo 1 resalta a cat__Calle_Autopista Vespucio Norte con coeficiente -10.487 (p=nan).
-- Modelo 1 resalta a cat__ID_Santiago-77 con coeficiente -10.053 (p=nan).
-- Modelo 1 resalta a cat__ID_Providencia-428 con coeficiente -9.934 (p=nan).
-- Modelo 2 identifica a cat__Calle_Padre Mariano con coeficiente -10.774 (p=0.000).
-- Modelo 2 identifica a cat__Calle_Ricardo Wagner con coeficiente -9.880 (p=0.000).
-- Modelo 2 identifica a cat__Calle_Av. Egaña con coeficiente -7.571 (p=0.000).
-- Modelo 2 identifica a cat__Calle_"Av. OHiggins" con coeficiente -7.526 (p=0.000).
-- Modelo 2 identifica a cat__Calle_San Pedro con coeficiente -5.655 (p=0.000).
+- Modelo 1 resalta a Comuna_Pudahuel con coeficiente -2.291 (p=nan).
+- Modelo 1 resalta a Ranking Regional con coeficiente -2.059 (p=nan).
+- Modelo 1 resalta a Comuna_Melipilla con coeficiente 1.673 (p=nan).
+- Modelo 1 resalta a Comuna_Recoleta con coeficiente -1.311 (p=nan).
+- Modelo 1 resalta a Comuna_Peñalolén con coeficiente -1.275 (p=nan).
+- Modelo 2 identifica a Comuna_Pudahuel con coeficiente -2.432 (p=0.000).
+- Modelo 2 identifica a Ranking Regional con coeficiente -2.272 (p=0.000).
+- Modelo 2 identifica a Comuna_La Pintana con coeficiente 1.439 (p=0.047).
+- Modelo 2 identifica a Comuna_Recoleta con coeficiente -1.109 (p=0.016).
+- Modelo 2 identifica a duracion_horas con coeficiente -1.078 (p=0.000).
 - Correlación destacada entre duracion_horas y duracion_min: 1.00.
 - Correlación destacada entre hora_inicio_num y hora_fin_num: 0.97.
 - Correlación destacada entre Ranking Regional y Largo km: -0.69.

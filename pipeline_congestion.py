@@ -407,9 +407,26 @@ class RareLabelEncoder(BaseEstimator, TransformerMixin):
         for col in self.feature_names_in_:
             if col not in X_df.columns:
                 continue
+<<<<<<< Updated upstream
             keep = self.keep_.get(col, set())
             mask = ~X_df[col].isin(keep)
             X_df.loc[mask & X_df[col].notna(), col] = self.rare_label
+=======
+            allowed = self.category_maps_.get(col, set())
+            X_df.loc[:, col] = X_df[col].astype(object)
+            mask = ~X_df[col].isin(allowed) & X_df[col].notna()
+            if mask.any():
+                X_df.loc[mask, col] = self.rare_label
+        return X_df
+
+    def get_feature_names_out(self, input_features=None):
+        """Devuelve los mismos nombres de entrada (el número de columnas no cambia)."""
+        if input_features is not None:
+            return np.asarray(input_features, dtype=object)
+        return np.asarray(self.feature_names_in_, dtype=object)
+
+    def _ensure_dataframe(self, X) -> pd.DataFrame:
+>>>>>>> Stashed changes
         if isinstance(X, pd.DataFrame):
             return X_df
         return X_df.values
@@ -1031,6 +1048,35 @@ def build_preprocessor(
     return ColumnTransformer(transformers, remainder="drop")
 
 
+def get_feature_names_from_preprocessor(
+    preprocessor: ColumnTransformer,
+    numeric_features: List[str],
+    categorical_features: List[str],
+) -> np.ndarray:
+    """Construye los nombres de características a partir del preprocesador.
+
+    - Numéricas: se mantienen los nombres originales.
+    - Categóricas: se obtienen desde el OneHotEncoder ('ohe').
+    Esto evita depender de get_feature_names_out del ColumnTransformer/Pipeline
+    cuando hay transformadores personalizados.
+    """
+    feature_names: List[str] = []
+    for name, trans, cols in preprocessor.transformers_:
+        if name == "num":
+            # cols puede ser una lista de columnas numéricas
+            feature_names.extend(list(cols))
+        elif name == "cat":
+            # 'trans' es un Pipeline; tomamos el OHE final
+            if hasattr(trans, "named_steps") and "ohe" in trans.named_steps:
+                ohe = trans.named_steps["ohe"]
+                ohe_names = ohe.get_feature_names_out(categorical_features)
+                feature_names.extend(list(ohe_names))
+            else:
+                # Respaldo: usar nombres de columnas originales si falla
+                feature_names.extend(list(categorical_features))
+    return np.asarray(feature_names, dtype=object)
+
+
 def to_dense(matrix) -> np.ndarray:
     """Convierte matrices dispersas en densas para statsmodels."""
 
@@ -1270,7 +1316,9 @@ def modelar_modelo1(
 
     X_train_processed = pipeline.named_steps["preprocessor"].transform(X_train)
     X_test_processed = pipeline.named_steps["preprocessor"].transform(X_test)
-    feature_names = pipeline.named_steps["preprocessor"].get_feature_names_out()
+    feature_names = get_feature_names_from_preprocessor(
+        pipeline.named_steps["preprocessor"], numeric_features, categorical_features
+    )
 
     features_path = save_feature_matrix(
         [
@@ -1436,7 +1484,9 @@ def modelar_modelo2(
     preprocessor = build_preprocessor(numeric_features, categorical_features, config)
     preprocessor.fit(X_train, y_train)
 
-    feature_names = preprocessor.get_feature_names_out()
+    feature_names = get_feature_names_from_preprocessor(
+        preprocessor, numeric_features, categorical_features
+    )
     X_train_processed = to_dense(preprocessor.transform(X_train))
     X_test_processed = to_dense(preprocessor.transform(X_test))
 
