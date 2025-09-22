@@ -50,6 +50,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from statsmodels.stats.diagnostic import het_breuschpagan
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 # -----------------------------------------------------------------------------
@@ -76,7 +77,6 @@ NUMERIC_COLUMNS_ORDER = [
     "Largo_km_winsor",
     "Velocidad km/h",
     "duracion_min",
-    "hora_central",
     "hora_sin",
     "hora_cos",
 ]
@@ -126,6 +126,12 @@ class PipelineConfig:
     largo_transform_applied: str = "none"
     largo_skewness: Optional[float] = None
     constant_columns_dropped: List[str] = field(default_factory=list)
+    use_calle: bool = False
+    use_id: bool = False
+    vif_threshold: float = 10.0
+    rare_categorical_columns: List[str] = field(default_factory=list)
+    hora_central_removed: bool = False
+    largo_raw_excluded: bool = False
 
 
 @dataclass
@@ -182,10 +188,28 @@ def parse_arguments() -> PipelineConfig:
         default=TRANSFORM_LARGO,
         help="Transformación a aplicar sobre 'Largo km' antes del modelado",
     )
+    parser.add_argument(
+        "--use-calle",
+        action="store_true",
+        help="Incluye la variable 'Calle' aplicando rare-bucketing previo al OHE",
+    )
+    parser.add_argument(
+        "--use-id",
+        action="store_true",
+        help="Incluye la variable 'ID' aplicando rare-bucketing previo al OHE",
+    )
+    parser.add_argument(
+        "--vif-threshold",
+        type=float,
+        default=10.0,
+        help="Umbral de alerta para los valores de VIF",
+    )
     args = parser.parse_args()
 
     if not 0 < args.test_size < 1:
         raise ValueError("--test-size debe estar entre 0 y 1.")
+    if args.vif_threshold <= 0:
+        raise ValueError("--vif-threshold debe ser mayor a 0.")
 
     return PipelineConfig(
         input_csv=args.input,
@@ -199,6 +223,9 @@ def parse_arguments() -> PipelineConfig:
         min_rare_count=args.min_rare_count,
         top_categories=args.top_categories,
         transform_largo=args.transform_largo,
+        use_calle=args.use_calle,
+        use_id=args.use_id,
+        vif_threshold=args.vif_threshold,
     )
 
 
@@ -301,52 +328,50 @@ def apply_largo_transform(df: pd.DataFrame, config: PipelineConfig) -> None:
         config.largo_feature_name = "Largo km"
         config.largo_transform_applied = "missing"
         config.largo_skewness = None
+        config.largo_raw_excluded = False
         return
 
     largo_series = pd.to_numeric(df["Largo km"], errors="coerce")
     if largo_series.dropna().empty:
-        LOGGER.info("[INFO] 'Largo km' sin datos válidos para transformar.")
+        LOGGER.info("[NOTE] 'Largo km' sin datos válidos para transformar.")
         config.largo_feature_name = "Largo km"
         config.largo_transform_applied = "none"
         config.largo_skewness = None
+        config.largo_raw_excluded = False
         return
+
     skew_value = largo_series.dropna().skew()
     config.largo_skewness = float(skew_value) if pd.notna(skew_value) else None
 
-    method = (config.transform_largo or "none").lower()
-    feature_name = "Largo km"
+    clipped = largo_series.clip(lower=0)
+    df.loc[:, "Largo_km_log1p"] = np.log1p(clipped)
+    config.largo_feature_name = "Largo_km_log1p"
+    config.largo_raw_excluded = True
 
-    if method == "log1p":
-        clipped = largo_series.clip(lower=0)
-        df.loc[:, "Largo_km_log1p"] = np.log1p(clipped)
-        feature_name = "Largo_km_log1p"
-        config.largo_transform_applied = "log1p"
-        if config.largo_skewness is not None and config.largo_skewness > 2:
-            LOGGER.info(
-                "[OK] Transformación log1p aplicada a 'Largo km' (skew=%.2f > 2).",
-                config.largo_skewness,
-            )
-        else:
-            LOGGER.info(
-                "[INFO] Transformación log1p aplicada a 'Largo km' (skew=%.2f).",
-                config.largo_skewness if config.largo_skewness is not None else float("nan"),
-            )
-    elif method == "winsor":
+    method = (config.transform_largo or "none").lower()
+    if method == "winsor":
         lower = np.nanpercentile(largo_series, 1)
         upper = np.nanpercentile(largo_series, 99)
         df.loc[:, "Largo_km_winsor"] = largo_series.clip(lower=lower, upper=upper)
-        feature_name = "Largo_km_winsor"
         config.largo_transform_applied = "winsor"
         LOGGER.info(
-            "[INFO] Transformación winsor aplicada a 'Largo km' (p1=%.3f, p99=%.3f).",
+            "[NOTE] Transformación winsor aplicada a 'Largo km' (p1=%.3f, p99=%.3f).",
             lower,
             upper,
         )
+    elif method == "log1p":
+        config.largo_transform_applied = "log1p"
     else:
         config.largo_transform_applied = "none"
-        LOGGER.info("[INFO] Se conserva 'Largo km' sin transformación explícita.")
+        LOGGER.info("[NOTE] Se conserva 'Largo km' sin transformación adicional.")
 
-    config.largo_feature_name = feature_name if feature_name in df.columns else "Largo km"
+    if config.largo_skewness is not None:
+        LOGGER.info(
+            "[OK] 'Largo_km_log1p' creado para el modelado (skew original=%.2f).",
+            config.largo_skewness,
+        )
+    else:
+        LOGGER.info("[OK] 'Largo_km_log1p' creado para el modelado.")
 
 
 def drop_constant_columns(df: pd.DataFrame, protected: Optional[List[str]] = None) -> Tuple[pd.DataFrame, List[str]]:
@@ -363,7 +388,7 @@ def drop_constant_columns(df: pd.DataFrame, protected: Optional[List[str]] = Non
 
     if drop_cols:
         df = df.drop(columns=drop_cols)
-        LOGGER.info("[INFO] Columnas constantes eliminadas: %s", ", ".join(drop_cols))
+        LOGGER.info("[OK] Columnas constantes eliminadas: %s", ", ".join(drop_cols))
 
     return df, drop_cols
 
@@ -386,17 +411,28 @@ class ArrayColumnSelector(BaseEstimator, TransformerMixin):
 class RareLabelEncoder(BaseEstimator, TransformerMixin):
     """Agrupa categorías infrecuentes en una etiqueta común."""
 
-    def __init__(self, min_prop: float = 0.01, rare_label: str = "__RARE__"):
+    def __init__(
+        self,
+        min_prop: float = 0.01,
+        rare_label: str = "__RARE__",
+        columns: Optional[List[str]] = None,
+    ):
         self.min_prop = min_prop
         self.rare_label = rare_label
+        self.columns = columns
         self.keep_: Dict[str, set] = {}
         self.feature_names_in_: List[str] = []
+        self.columns_: List[str] = []
 
     def fit(self, X, y=None):
         X_df = self._to_dataframe(X)
         self.feature_names_in_ = X_df.columns.tolist()
+        if self.columns is None:
+            self.columns_ = self.feature_names_in_.copy()
+        else:
+            self.columns_ = [col for col in self.columns if col in self.feature_names_in_]
         self.keep_ = {}
-        for col in self.feature_names_in_:
+        for col in self.columns_:
             vc = X_df[col].value_counts(normalize=True, dropna=True)
             keep = vc[vc >= self.min_prop].index
             self.keep_[col] = set(keep)
@@ -404,14 +440,14 @@ class RareLabelEncoder(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         X_df = self._to_dataframe(X)
-        for col in self.feature_names_in_:
+        for col in self.columns_:
             if col not in X_df.columns:
                 continue
             keep = self.keep_.get(col, set())
             mask = ~X_df[col].isin(keep) & X_df[col].notna()
             if mask.any():
                 X_df.loc[mask, col] = self.rare_label
-        return X_df
+        return X_df[self.feature_names_in_]
 
     def get_feature_names_out(self, input_features=None):
         """Devuelve los mismos nombres de entrada (el número de columnas no cambia)."""
@@ -565,6 +601,11 @@ def limpiar_y_enriquecer(df: pd.DataFrame, config: PipelineConfig) -> pd.DataFra
     angulo = 2 * np.pi * (hora_central / 24.0)
     df.loc[:, "hora_sin"] = np.sin(angulo)
     df.loc[:, "hora_cos"] = np.cos(angulo)
+
+    if "hora_central" in df.columns:
+        df.drop(columns=["hora_central"], inplace=True)
+        config.hora_central_removed = True
+        LOGGER.info("[NOTE] 'hora_central' eliminada tras la codificación cíclica.")
 
     df.drop(columns=["duracion_horas", "hora_inicio_num", "hora_fin_num"], inplace=True, errors="ignore")
 
@@ -953,18 +994,64 @@ def preparar_datos_modelado(
     if problem_type == "classification" and df[target_col].nunique() < 2:
         raise ValueError(f"La variable objetivo {target_col} no tiene al menos dos clases.")
 
-    numeric_features = [col for col in NUMERIC_COLUMNS_ORDER if col in df.columns and col != target_col]
-    if "Largo km" in numeric_features and config.largo_feature_name != "Largo km":
-        numeric_features = [col for col in numeric_features if col != "Largo km"]
-    if (
-        config.largo_feature_name
-        and config.largo_feature_name != target_col
-        and config.largo_feature_name in df.columns
-        and config.largo_feature_name not in numeric_features
-    ):
-        numeric_features.append(config.largo_feature_name)
+    numeric_features = [
+        col
+        for col in NUMERIC_COLUMNS_ORDER
+        if col in df.columns and col != target_col and col != "Largo km"
+    ]
+
+    if config.largo_feature_name == "Largo_km_log1p" and "Largo_km_log1p" in df.columns:
+        if "Largo_km_log1p" not in numeric_features and target_col != "Largo_km_log1p":
+            numeric_features.append("Largo_km_log1p")
+    elif "Largo_km_log1p" in df.columns and target_col != "Largo_km_log1p":
+        numeric_features.append("Largo_km_log1p")
+    elif "Largo km" in df.columns and target_col != "Largo km":
+        numeric_features.append("Largo km")
+
     numeric_features = list(dict.fromkeys(numeric_features))
-    categorical_features = [col for col in CATEGORICAL_COLUMNS if col in df.columns]
+
+    categorical_features: List[str] = []
+    excluded_high_card: List[str] = []
+    for col in CATEGORICAL_COLUMNS:
+        if col not in df.columns or col == target_col:
+            continue
+        if col == "Calle" and not config.use_calle:
+            excluded_high_card.append(col)
+            continue
+        if col == "ID" and not config.use_id:
+            excluded_high_card.append(col)
+            continue
+        categorical_features.append(col)
+
+    if excluded_high_card:
+        LOGGER.info(
+            "[NOTE] Columnas categóricas omitidas por defecto: %s.",
+            ", ".join(excluded_high_card),
+        )
+    if config.use_calle and "Calle" in categorical_features:
+        LOGGER.info(
+            "[NOTE] 'Calle' incluida con rare-bucketing (umbral %.2f).",
+            config.rare_threshold,
+        )
+    if config.use_id and "ID" in categorical_features:
+        LOGGER.info(
+            "[NOTE] 'ID' incluida con rare-bucketing (umbral %.2f).",
+            config.rare_threshold,
+        )
+
+    rare_cols: List[str] = []
+    if "Comuna" in categorical_features:
+        rare_cols.append("Comuna")
+    if config.use_calle and "Calle" in categorical_features:
+        rare_cols.append("Calle")
+    if config.use_id and "ID" in categorical_features:
+        rare_cols.append("ID")
+    config.rare_categorical_columns = rare_cols
+
+    if config.largo_raw_excluded and "Largo km" in df.columns:
+        LOGGER.info(
+            "[NOTE] 'Largo km' se excluye del modelado; se utilizará 'Largo_km_log1p'."
+        )
 
     feature_cols = [col for col in numeric_features + categorical_features if col not in EXCLUDE_FEATURES]
 
@@ -1008,7 +1095,9 @@ def create_one_hot_encoder(config: PipelineConfig) -> OneHotEncoder:
         LOGGER.info("[OK] OneHotEncoder configurado con infrequent_if_exist=TRUE.")
         return encoder
     except TypeError:
-        LOGGER.info("[INFO] OneHotEncoder sin soporte infrequent_if_exist. Se usa handle_unknown='ignore'.")
+        LOGGER.info(
+            "[NOTE] OneHotEncoder sin soporte infrequent_if_exist. Se usa handle_unknown='ignore'."
+        )
         try:
             return OneHotEncoder(sparse_output=False, handle_unknown="ignore", drop="first")
         except TypeError:
@@ -1026,12 +1115,19 @@ def build_preprocessor(
     if numeric_features:
         transformers.append(("num", Pipeline([("scaler", StandardScaler())]), numeric_features))
     if categorical_features:
-        cat_pipeline = Pipeline(
-            [
-                ("rare", RareLabelEncoder(min_prop=config.rare_threshold)),
-                ("ohe", create_one_hot_encoder(config)),
-            ]
-        )
+        cat_steps: List[Tuple[str, TransformerMixin]] = []
+        if config.rare_categorical_columns:
+            cat_steps.append(
+                (
+                    "rare",
+                    RareLabelEncoder(
+                        min_prop=config.rare_threshold,
+                        columns=config.rare_categorical_columns,
+                    ),
+                )
+            )
+        cat_steps.append(("ohe", create_one_hot_encoder(config)))
+        cat_pipeline = Pipeline(cat_steps)
         transformers.append(("cat", cat_pipeline, categorical_features))
     return ColumnTransformer(transformers, remainder="drop")
 
@@ -1170,7 +1266,10 @@ def calcular_vif(
     zero_var_cols = [col for col in vif_data.columns if np.isclose(vif_data[col].var(ddof=0), 0.0)]
     if zero_var_cols:
         vif_data = vif_data.drop(columns=zero_var_cols)
-        LOGGER.info("[INFO] Columnas excluidas del VIF por varianza nula: %s", ", ".join(zero_var_cols))
+        LOGGER.info(
+            "[NOTE] Columnas excluidas del VIF por varianza nula: %s",
+            ", ".join(zero_var_cols),
+        )
 
     if vif_data.empty:
         LOGGER.info("Sin columnas restantes para calcular VIF tras exclusiones.")
@@ -1191,6 +1290,14 @@ def calcular_vif(
         return None
 
     vif_df = pd.DataFrame(vif_records).sort_values("VIF", ascending=False)
+    high_vif = vif_df[vif_df["VIF"] > config.vif_threshold]
+    if not high_vif.empty:
+        LOGGER.warning(
+            "[WARN] %d variables superan el VIF=%.1f: %s. Considere revisar la codificación horaria o eliminar redundancias.",
+            len(high_vif),
+            config.vif_threshold,
+            ", ".join(high_vif["variable"].tolist()),
+        )
     path = os.path.join(config.results_dir, "colinearidad_vif.csv")
     vif_df.to_csv(path, index=False)
     LOGGER.info("[OK] VIF calculado para %d variables.", len(vif_df))
@@ -1202,8 +1309,9 @@ def run_ols_with_checks(
     y: np.ndarray,
     feature_names: List[str],
     fallback_label: str,
-) -> Tuple[pd.DataFrame, str]:
-    """Ajusta OLS con chequeos de rango y aplica Ridge como fallback."""
+    config: PipelineConfig,
+) -> Tuple[pd.DataFrame, str, Optional[Dict[str, object]]]:
+    """Ajusta OLS con chequeos de rango, diagnósticos y aplica Ridge como fallback."""
 
     X_dense = to_dense(X)
     feature_array = np.asarray(feature_names)
@@ -1228,11 +1336,15 @@ def run_ols_with_checks(
 
     if issues:
         LOGGER.info(
-            "[INFO] Usando Ridge en %s por colinealidad (%s).",
+            "[NOTE] Usando Ridge en %s por colinealidad (%s).",
             fallback_label,
             ", ".join(issues),
         )
-        return build_ridge_coefficients(X_dense, y, feature_names, dropped), "ridge"
+        LOGGER.info(
+            "[NOTE] No se generan diagnósticos de residuos debido al fallback a Ridge en %s.",
+            fallback_label,
+        )
+        return build_ridge_coefficients(X_dense, y, feature_names, dropped), "ridge", None
 
     try:
         model = sm.OLS(y, X_sm).fit()
@@ -1262,14 +1374,126 @@ def run_ols_with_checks(
                 }
             )
             coef_df = pd.concat([coef_df, dropped_df], ignore_index=True)
-        return coef_df, "ols"
+
+        residuals = model.resid
+        fitted = model.fittedvalues
+        n_obs = len(residuals)
+        normality_test_name = "Shapiro-Wilk" if n_obs <= 5000 else "D'Agostino K²"
+        normality_stat = np.nan
+        normality_pvalue = np.nan
+
+        try:
+            if n_obs <= 5000:
+                normality_stat, normality_pvalue = stats.shapiro(residuals)
+            else:
+                normality_stat, normality_pvalue = stats.normaltest(residuals)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "[WARN] Prueba de normalidad principal falló en %s (%s). Se usa KS.",
+                fallback_label,
+                exc,
+            )
+            normality_test_name = "Kolmogorov-Smirnov"
+            try:
+                resid_std = residuals
+                std_val = residuals.std(ddof=1)
+                if std_val > 0:
+                    resid_std = (residuals - residuals.mean()) / std_val
+                normality_stat, normality_pvalue = stats.kstest(resid_std, "norm")
+            except Exception as exc2:  # noqa: BLE001
+                LOGGER.warning(
+                    "[WARN] No se pudo calcular KS en %s (%s).",
+                    fallback_label,
+                    exc2,
+                )
+
+        try:
+            lm_stat, lm_pvalue, f_stat, f_pvalue = het_breuschpagan(residuals, X_sm)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "[WARN] No se pudo calcular Breusch-Pagan en %s (%s).",
+                fallback_label,
+                exc,
+            )
+            lm_pvalue = np.nan
+            f_pvalue = np.nan
+
+        match = re.search(r"modelo(\d+)", fallback_label)
+        if match:
+            diag_stub = f"modelo{match.group(1)}"
+        else:
+            diag_stub = sanitize_filename(fallback_label)
+
+        diag_text_path = os.path.join(
+            config.results_dir, f"diagnosticos_residuos_{diag_stub}.txt"
+        )
+        qq_path = os.path.join(
+            config.results_dir, f"diagnostico_qq_{diag_stub}.png"
+        )
+        resid_path = os.path.join(
+            config.results_dir, f"diagnostico_residuos_vs_pred_{diag_stub}.png"
+        )
+
+        def _fmt(val: object, digits: int = 5) -> str:
+            try:
+                if val is None or (isinstance(val, float) and np.isnan(val)):
+                    return "nan"
+                return f"{float(val):.{digits}f}"
+            except Exception:  # noqa: BLE001
+                return str(val)
+
+        diag_lines = [
+            f"Prueba de normalidad ({normality_test_name}): estadístico={_fmt(normality_stat, 4)} p-value={_fmt(normality_pvalue)}",
+            f"Breusch-Pagan: LM p-value={_fmt(lm_pvalue)} | F p-value={_fmt(f_pvalue)}",
+        ]
+        with open(diag_text_path, "w", encoding="utf-8") as diag_file:
+            diag_file.write("\n".join(diag_lines))
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        stats.probplot(residuals, dist="norm", plot=ax)
+        ax.set_title(f"QQ-plot de residuos ({fallback_label})")
+        fig.tight_layout()
+        fig.savefig(qq_path, dpi=PLOT_DPI)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        sns.scatterplot(x=fitted, y=residuals, ax=ax, edgecolor="white", linewidth=0.4)
+        ax.axhline(0, color="red", linestyle="--", linewidth=1)
+        ax.set_xlabel("ŷ (train)")
+        ax.set_ylabel("Residuo")
+        ax.set_title(f"Residuos vs predicción ({fallback_label})")
+        fig.tight_layout()
+        fig.savefig(resid_path, dpi=PLOT_DPI)
+        plt.close(fig)
+
+        diagnostics = {
+            "text_path": diag_text_path,
+            "qq_plot": qq_path,
+            "resid_vs_pred_plot": resid_path,
+            "normality": {
+                "test": normality_test_name,
+                "statistic": float(normality_stat) if not np.isnan(normality_stat) else np.nan,
+                "p_value": float(normality_pvalue) if not np.isnan(normality_pvalue) else np.nan,
+            },
+            "breusch_pagan": {
+                "lm_pvalue": float(lm_pvalue) if not np.isnan(lm_pvalue) else np.nan,
+                "f_pvalue": float(f_pvalue) if not np.isnan(f_pvalue) else np.nan,
+            },
+        }
+        LOGGER.info("[OK] Diagnósticos de residuos guardados en %s", diag_text_path)
+
+        return coef_df, "ols", diagnostics
     except Exception as exc:  # noqa: BLE001
         LOGGER.info(
-            "[INFO] Usando Ridge en %s por fallo de OLS (%s).",
+            "[NOTE] Usando Ridge en %s por fallo de OLS (%s).",
             fallback_label,
             exc,
         )
-        return build_ridge_coefficients(X_dense, y, feature_names, dropped), "ridge"
+        LOGGER.info(
+            "[NOTE] No se generan diagnósticos de residuos debido al fallback a Ridge en %s.",
+            fallback_label,
+        )
+        return build_ridge_coefficients(X_dense, y, feature_names, dropped), "ridge", None
 
 
 # -----------------------------------------------------------------------------
@@ -1316,6 +1540,8 @@ def modelar_modelo1(
         config,
     )
 
+    diagnostics = None
+
     if problem_type == "regression":
         y_pred = pipeline.predict(X_test)
         mse = mean_squared_error(y_test, y_pred)
@@ -1334,11 +1560,12 @@ def modelar_modelo1(
             "Bias": float(np.mean(baseline_pred - y_test)),
         }
 
-        coef_df, coef_source = run_ols_with_checks(
+        coef_df, coef_source, diagnostics = run_ols_with_checks(
             X_train_processed,
             y_train.values,
             list(feature_names),
             "modelo1_regresion",
+            config,
         )
         y_proba = None
     else:
@@ -1372,6 +1599,8 @@ def modelar_modelo1(
             "F1": f1_score(y_test, baseline_pred, pos_label=positive_class, zero_division=0),
             "ROC_AUC": np.nan,
         }
+
+        diagnostics = None
 
         X_dense = to_dense(X_train_processed)
         X_filtered, kept_features, dropped = filter_constant_columns(X_dense, np.asarray(feature_names))
@@ -1441,6 +1670,7 @@ def modelar_modelo1(
             "feature_names": feature_names,
             "coef_df": coef_df,
             "coef_source": coef_source,
+            "diagnostics": diagnostics,
             "X_test_processed": to_dense(X_test_processed),
             "X_train_processed": to_dense(X_train_processed),
             "features_path": features_path,
@@ -1513,6 +1743,8 @@ def modelar_modelo2(
     X_train_selected = X_train_processed[:, support_mask]
     X_test_selected = X_test_processed[:, support_mask]
 
+    diagnostics = None
+
     if problem_type == "regression":
         y_pred = pipeline.predict(X_test)
         mse = mean_squared_error(y_test, y_pred)
@@ -1521,11 +1753,12 @@ def modelar_modelo2(
         mae = mean_absolute_error(y_test, y_pred)
         bias = float(np.mean(y_pred - y_test))
         metrics_model = {"RMSE": rmse, "R2": r2, "MAE": mae, "Bias": bias}
-        coef_df, coef_source = run_ols_with_checks(
+        coef_df, coef_source, diagnostics = run_ols_with_checks(
             X_train_selected,
             y_train.values,
             list(selected_features),
             "modelo2_regresion",
+            config,
         )
         y_proba = None
     else:
@@ -1545,6 +1778,7 @@ def modelar_modelo2(
             if y_test.nunique() == 2
             else np.nan,
         }
+        diagnostics = None
         X_dense = X_train_selected
         X_filtered, kept_features, dropped = filter_constant_columns(X_dense, np.asarray(selected_features))
         X_sm = sm.add_constant(X_filtered, has_constant="add")
@@ -1608,6 +1842,7 @@ def modelar_modelo2(
             "feature_names": selected_features,
             "coef_df": coef_df,
             "coef_source": coef_source,
+            "diagnostics": diagnostics,
             "X_test_processed": X_test_selected,
             "X_train_processed": X_train_selected,
             "support_mask": support_mask,
@@ -1849,6 +2084,13 @@ def generar_reporte_pdf(
     figure_paths: List[str] = []
     for output in (eda_outputs, normalidad_outputs, pca_outputs, comparacion_outputs):
         figure_paths.extend(output.get("figures", []))
+    for model_result in (modelo1, modelo2):
+        diagnostics = model_result.get("diagnostics") if isinstance(model_result, dict) else None
+        if diagnostics:
+            for key in ("qq_plot", "resid_vs_pred_plot"):
+                path = diagnostics.get(key)
+                if path:
+                    figure_paths.append(path)
 
     table_files = [
         "tabla_resumen_numericas.csv",
@@ -2004,6 +2246,110 @@ def generar_reporte_pdf(
             top_lines or ["No se identificaron coeficientes destacados."],
         )
 
+        vif_path = os.path.join(config.results_dir, "colinearidad_vif.csv")
+        vif_df = None
+        if os.path.exists(vif_path):
+            try:
+                vif_df = pd.read_csv(vif_path).sort_values("VIF", ascending=False)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("No se pudo leer el archivo de VIF (%s): %s", vif_path, exc)
+
+        selected_label = None
+        selected_model_dict: Optional[Dict] = None
+        for label, model_dict in (("Modelo 2", modelo2), ("Modelo 1", modelo1)):
+            if model_dict.get("coef_source") == "ols":
+                selected_label = label
+                selected_model_dict = model_dict
+                break
+        if selected_model_dict is None:
+            for label, model_dict in (("Modelo 2", modelo2), ("Modelo 1", modelo1)):
+                if model_dict.get("coef_df") is not None:
+                    selected_label = label
+                    selected_model_dict = model_dict
+                    break
+
+        top_coef_table = None
+        coef_source_label = ""
+        if selected_model_dict is not None:
+            coef_df = selected_model_dict.get("coef_df")
+            if coef_df is not None and not coef_df.empty:
+                working = coef_df[coef_df["variable"] != "const"].copy()
+                if not working.empty:
+                    working["abs_coef"] = working["coef"].abs()
+                    working.sort_values("abs_coef", ascending=False, inplace=True)
+                    display_cols = ["variable", "coef"]
+                    if "p_value" in working.columns:
+                        display_cols.append("p_value")
+                    top_coef_table = working.head(10)[display_cols].copy()
+                    top_coef_table.rename(
+                        columns={"variable": "Variable", "coef": "Coeficiente", "p_value": "p-valor"},
+                        inplace=True,
+                    )
+                    top_coef_table["Coeficiente"] = top_coef_table["Coeficiente"].astype(float).round(3)
+                    if "p-valor" in top_coef_table.columns:
+                        top_coef_table["p-valor"] = top_coef_table["p-valor"].astype(float).round(4)
+                    coef_source_label = f"{selected_label} (fuente: {selected_model_dict.get('coef_source', 'n/a')})"
+
+        note_lines = []
+        if coef_source_label:
+            note_lines.append(f"Coeficientes mostrados: {coef_source_label}.")
+        if config.hora_central_removed:
+            note_lines.append("'hora_central' fue eliminada tras usar codificación cíclica (hora_sin, hora_cos).")
+        else:
+            note_lines.append("'hora_central' no estuvo disponible para la codificación cíclica.")
+        if config.largo_raw_excluded:
+            note_lines.append("'Largo km' se excluyó del modelado; se utiliza únicamente 'Largo_km_log1p'.")
+        else:
+            note_lines.append("'Largo km' permanece en el modelado por falta de transformación alternativa.")
+
+        fig = plt.figure(figsize=(8.27, 11.69))
+        gs = fig.add_gridspec(3, 1, height_ratios=[1.4, 1.4, 0.6])
+        ax_vif = fig.add_subplot(gs[0])
+        ax_coef = fig.add_subplot(gs[1])
+        ax_notes = fig.add_subplot(gs[2])
+
+        for axis in (ax_vif, ax_coef, ax_notes):
+            axis.axis("off")
+
+        ax_vif.set_title("VIF ordenado (top 15)", fontsize=14, fontweight="bold")
+        if vif_df is not None and not vif_df.empty:
+            display_vif = vif_df.head(15).copy()
+            display_vif.rename(columns={"variable": "Variable", "VIF": "VIF"}, inplace=True)
+            display_vif["VIF"] = display_vif["VIF"].astype(float).round(2)
+            table = ax_vif.table(
+                cellText=display_vif.values,
+                colLabels=display_vif.columns,
+                loc="center",
+            )
+            table.auto_set_font_size(False)
+            table.set_fontsize(9)
+            table.scale(1, 1.2)
+        else:
+            ax_vif.text(0.5, 0.5, "No se encontraron valores de VIF para mostrar.", ha="center", va="center", fontsize=11)
+
+        ax_coef.set_title("Top coeficientes por |coef|", fontsize=14, fontweight="bold")
+        if top_coef_table is not None and not top_coef_table.empty:
+            coef_table = ax_coef.table(
+                cellText=top_coef_table.values,
+                colLabels=top_coef_table.columns,
+                loc="center",
+            )
+            coef_table.auto_set_font_size(False)
+            coef_table.set_fontsize(9)
+            coef_table.scale(1, 1.2)
+        else:
+            ax_coef.text(0.5, 0.5, "No hay coeficientes disponibles tras el filtrado.", ha="center", va="center", fontsize=11)
+
+        ax_notes.set_title("Notas", fontsize=12, fontweight="bold", loc="left")
+        y_pos = 0.85
+        for line in note_lines:
+            ax_notes.text(0.05, y_pos, line, ha="left", va="top", fontsize=11)
+            y_pos -= 0.12
+
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
         # Comparación
         comp_text = [
             "Se compararon métricas clave frente a un baseline simple y se generaron gráficos diagnósticos para ambos modelos.",
@@ -2082,7 +2428,7 @@ def main() -> None:
         df_clean = run_stage("limpiar_y_enriquecer", limpiar_y_enriquecer, stage_results, df_raw, config)
         if config.constant_columns_dropped:
             LOGGER.info(
-                "[INFO] Columnas descartadas por constancia: %s",
+                "[NOTE] Columnas descartadas por constancia: %s",
                 ", ".join(config.constant_columns_dropped),
             )
 
@@ -2251,7 +2597,7 @@ def main() -> None:
                     vif_stage.result,
                 )
             else:
-                LOGGER.info("[INFO] No se generó archivo de VIF (ver mensajes previos).")
+                LOGGER.info("[NOTE] No se generó archivo de VIF (ver mensajes previos).")
 
         LOGGER.info("[OK] Reporte PDF: %s", report_path)
 
