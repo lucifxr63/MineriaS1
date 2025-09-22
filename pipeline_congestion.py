@@ -1319,6 +1319,7 @@ def modelar_modelo1(
     feature_names = get_feature_names_from_preprocessor(
         pipeline.named_steps["preprocessor"], numeric_features, categorical_features
     )
+<<<<<<< Updated upstream
 
     features_path = save_feature_matrix(
         [
@@ -1328,6 +1329,8 @@ def modelar_modelo1(
         list(feature_names),
         config,
     )
+=======
+>>>>>>> Stashed changes
 
     if problem_type == "regression":
         y_pred = pipeline.predict(X_test)
