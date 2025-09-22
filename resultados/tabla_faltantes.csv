@@ -1,10 +1,8 @@
 variable,n_missing,pct_missing
 X,0,0.0
 Y,0,0.0
-Z,0,0.0
 Calle,39,1.11
 Comuna,0,0.0
-Fecha,0,0.0
 Hora Fin,0,0.0
 Hora Inicio,0,0.0
 ID,0,0.0
@@ -14,9 +12,10 @@ Largo km,0,0.0
 Velocidad km/h,0,0.0
 dt_inicio,0,0.0
 dt_fin,0,0.0
-duracion_horas,0,0.0
 duracion_min,0,0.0
-hora_inicio_num,0,0.0
-hora_fin_num,0,0.0
 peak,0,0.0
+hora_central,0,0.0
+hora_sin,0,0.0
+hora_cos,0,0.0
 TARGET_BIN,0,0.0
+Largo_km_log1p,0,0.0

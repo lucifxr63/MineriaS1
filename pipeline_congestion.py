@@ -407,14 +407,8 @@ class RareLabelEncoder(BaseEstimator, TransformerMixin):
         for col in self.feature_names_in_:
             if col not in X_df.columns:
                 continue
-<<<<<<< Updated upstream
             keep = self.keep_.get(col, set())
-            mask = ~X_df[col].isin(keep)
-            X_df.loc[mask & X_df[col].notna(), col] = self.rare_label
-=======
-            allowed = self.category_maps_.get(col, set())
-            X_df.loc[:, col] = X_df[col].astype(object)
-            mask = ~X_df[col].isin(allowed) & X_df[col].notna()
+            mask = ~X_df[col].isin(keep) & X_df[col].notna()
             if mask.any():
                 X_df.loc[mask, col] = self.rare_label
         return X_df
@@ -424,12 +418,6 @@ class RareLabelEncoder(BaseEstimator, TransformerMixin):
         if input_features is not None:
             return np.asarray(input_features, dtype=object)
         return np.asarray(self.feature_names_in_, dtype=object)
-
-    def _ensure_dataframe(self, X) -> pd.DataFrame:
->>>>>>> Stashed changes
-        if isinstance(X, pd.DataFrame):
-            return X_df
-        return X_df.values
 
     def _to_dataframe(self, X) -> pd.DataFrame:
         if isinstance(X, pd.DataFrame):
@@ -1319,8 +1307,6 @@ def modelar_modelo1(
     feature_names = get_feature_names_from_preprocessor(
         pipeline.named_steps["preprocessor"], numeric_features, categorical_features
     )
-<<<<<<< Updated upstream
-
     features_path = save_feature_matrix(
         [
             ("train", X_train_processed, X_train.index),
@@ -1329,8 +1315,6 @@ def modelar_modelo1(
         list(feature_names),
         config,
     )
-=======
->>>>>>> Stashed changes
 
     if problem_type == "regression":
         y_pred = pipeline.predict(X_test)

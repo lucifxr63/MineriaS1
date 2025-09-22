@@ -1,6 +1,7 @@
 var1,var2,corr
-duracion_horas,duracion_min,0.9999999999999968
-hora_inicio_num,hora_fin_num,0.9739355332682422
+hora_central,hora_sin,-0.9613774196303413
+Largo km,Largo_km_log1p,0.9490511782890799
+Ranking Regional,Largo_km_log1p,-0.8274164021335929
 Ranking Regional,Largo km,-0.6897624194106322
+hora_central,hora_cos,0.6290916828576741
 Ranking Regional,duracion_min,-0.5406030400573674
-Ranking Regional,duracion_horas,-0.5406030400573661

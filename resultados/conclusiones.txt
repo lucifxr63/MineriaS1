@@ -1,19 +1,19 @@
 Hallazgos:
-- Modelo 1 resalta a Comuna_Pudahuel con coeficiente -2.291 (p=nan).
-- Modelo 1 resalta a Ranking Regional con coeficiente -2.059 (p=nan).
-- Modelo 1 resalta a Comuna_Melipilla con coeficiente 1.673 (p=nan).
-- Modelo 1 resalta a Comuna_Recoleta con coeficiente -1.311 (p=nan).
-- Modelo 1 resalta a Comuna_Peñalolén con coeficiente -1.275 (p=nan).
-- Modelo 2 identifica a Comuna_Pudahuel con coeficiente -2.432 (p=0.000).
-- Modelo 2 identifica a Ranking Regional con coeficiente -2.272 (p=0.000).
-- Modelo 2 identifica a Comuna_La Pintana con coeficiente 1.439 (p=0.047).
-- Modelo 2 identifica a Comuna_Recoleta con coeficiente -1.109 (p=0.016).
-- Modelo 2 identifica a duracion_horas con coeficiente -1.078 (p=0.000).
-- Correlación destacada entre duracion_horas y duracion_min: 1.00.
-- Correlación destacada entre hora_inicio_num y hora_fin_num: 0.97.
+- Modelo 1 resalta a Comuna_Pudahuel con coeficiente -2.956 (p=0.012).
+- Modelo 1 resalta a Comuna_Recoleta con coeficiente -2.086 (p=0.074).
+- Modelo 1 resalta a Comuna_Peñalolén con coeficiente -1.885 (p=0.066).
+- Modelo 1 resalta a Comuna_Lampa con coeficiente -1.789 (p=0.263).
+- Modelo 1 resalta a Comuna_Quinta Normal con coeficiente -1.774 (p=0.158).
+- Modelo 2 identifica a Comuna_Pudahuel con coeficiente -2.213 (p=0.000).
+- Modelo 2 identifica a Comuna_La Pintana con coeficiente 1.585 (p=0.027).
+- Modelo 2 identifica a Ranking Regional con coeficiente -1.480 (p=0.000).
+- Modelo 2 identifica a duracion_min con coeficiente -1.084 (p=0.000).
+- Modelo 2 identifica a Comuna_Recoleta con coeficiente -0.971 (p=0.033).
+- Correlación destacada entre hora_central y hora_sin: -0.96.
+- Correlación destacada entre Largo km y Largo_km_log1p: 0.95.
+- Correlación destacada entre Ranking Regional y Largo_km_log1p: -0.83.
 - Correlación destacada entre Ranking Regional y Largo km: -0.69.
-- Correlación destacada entre Ranking Regional y duracion_min: -0.54.
-- Correlación destacada entre Ranking Regional y duracion_horas: -0.54.
+- Correlación destacada entre hora_central y hora_cos: 0.63.
 - Velocidad promedio en periodo Punta: 17.64 km/h.
 - Velocidad promedio en periodo Valle: 18.16 km/h.
 - La comuna con menor velocidad promedio es Pudahuel (15.37 km/h).
