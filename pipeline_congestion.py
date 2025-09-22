@@ -1348,20 +1348,21 @@ def run_ols_with_checks(
 
     try:
         model = sm.OLS(y, X_sm).fit()
+        robust_model = model.get_robustcov_results(cov_type="HC1")
         LOGGER.info(
             "[OK] OLS válido en %s (n=%d, p=%d, rank=%d, df_resid=%.0f).",
             fallback_label,
             n,
             p,
             rank,
-            model.df_resid,
+            robust_model.df_resid,
         )
         coef_df = pd.DataFrame(
             {
                 "variable": ["const"] + kept_features,
-                "coef": model.params,
-                "std_err": model.bse,
-                "p_value": model.pvalues,
+                "coef": robust_model.params,
+                "std_err": robust_model.bse,
+                "p_value": robust_model.pvalues,
             }
         )
         if dropped:
@@ -1375,8 +1376,8 @@ def run_ols_with_checks(
             )
             coef_df = pd.concat([coef_df, dropped_df], ignore_index=True)
 
-        residuals = model.resid
-        fitted = model.fittedvalues
+        residuals = robust_model.resid
+        fitted = robust_model.fittedvalues
         n_obs = len(residuals)
         normality_test_name = "Shapiro-Wilk" if n_obs <= 5000 else "D'Agostino K²"
         normality_stat = np.nan
@@ -1421,18 +1422,18 @@ def run_ols_with_checks(
         match = re.search(r"modelo(\d+)", fallback_label)
         if match:
             diag_stub = f"modelo{match.group(1)}"
+            qq_stub = f"m{match.group(1)}"
         else:
             diag_stub = sanitize_filename(fallback_label)
+            qq_stub = diag_stub
 
         diag_text_path = os.path.join(
             config.results_dir, f"diagnosticos_residuos_{diag_stub}.txt"
         )
-        qq_path = os.path.join(
-            config.results_dir, f"diagnostico_qq_{diag_stub}.png"
-        )
-        resid_path = os.path.join(
-            config.results_dir, f"diagnostico_residuos_vs_pred_{diag_stub}.png"
-        )
+        qq_filename = f"qqplot_residuos_{qq_stub}.png"
+        resid_filename = f"residuos_vs_pred_{qq_stub}.png"
+        qq_path = os.path.join(config.results_dir, qq_filename)
+        resid_path = os.path.join(config.results_dir, resid_filename)
 
         def _fmt(val: object, digits: int = 5) -> str:
             try:
@@ -1443,6 +1444,7 @@ def run_ols_with_checks(
                 return str(val)
 
         diag_lines = [
+            "Errores estándar robustos HC1 utilizados para la inferencia.",
             f"Prueba de normalidad ({normality_test_name}): estadístico={_fmt(normality_stat, 4)} p-value={_fmt(normality_pvalue)}",
             f"Breusch-Pagan: LM p-value={_fmt(lm_pvalue)} | F p-value={_fmt(f_pvalue)}",
         ]
@@ -1898,6 +1900,7 @@ def comparar_modelos(
     )
     metrics_path = os.path.join(config.results_dir, "metricas_modelos.csv")
     metrics_df.to_csv(metrics_path, index=False)
+    outputs["metrics_path"] = metrics_path
 
     if problem_type == "regression":
         y_test = modelo1["y_test"]
@@ -1911,10 +1914,11 @@ def comparar_modelos(
             ax.set_xlabel("y real")
             ax.set_ylabel("y predicho")
             ax.set_title(f"Modelo {idx}: y vs y_hat")
-            scatter_path = os.path.join(config.results_dir, f"modelo_scatter_y_vs_yhat_m{idx}.png")
+            scatter_path = os.path.join(config.results_dir, f"y_vs_yhat_m{idx}.png")
             fig.tight_layout()
             fig.savefig(scatter_path, dpi=PLOT_DPI)
             outputs["figures"].append(scatter_path)
+            outputs[f"y_vs_yhat_m{idx}"] = scatter_path
             plt.close(fig)
 
             residuals = y_test - y_pred
@@ -1928,6 +1932,7 @@ def comparar_modelos(
             fig.tight_layout()
             fig.savefig(resid_path, dpi=PLOT_DPI)
             outputs["figures"].append(resid_path)
+            outputs[f"residuos_m{idx}"] = resid_path
             plt.close(fig)
     else:
         y_test = modelo1["y_test"]
@@ -2404,6 +2409,478 @@ def generar_reporte_pdf(
     LOGGER.info("Reporte PDF guardado en %s", report_path)
     return report_path
 
+
+def _read_csv_table(
+    path: str,
+    columns: Optional[List[str]] = None,
+    head: Optional[int] = None,
+    round_map: Optional[Dict[str, int]] = None,
+) -> pd.DataFrame:
+    """Carga un CSV en DataFrame y aplica filtros opcionales."""
+
+    if not path or not os.path.exists(path):
+        return pd.DataFrame()
+
+    df = pd.read_csv(path)
+    if columns:
+        available = [col for col in columns if col in df.columns]
+        if available:
+            df = df[available]
+    if head is not None:
+        df = df.head(head)
+    if round_map:
+        for col, digits in round_map.items():
+            if col in df.columns:
+                df.loc[:, col] = df[col].round(digits)
+    return df
+
+
+def _add_pdf_page(pdf: PdfPages, title: str, elements: List[Dict[str, object]]) -> None:
+    """Helper para agregar diapositivas a la presentación."""
+
+    if elements is None:
+        elements = []
+
+    fig = plt.figure(figsize=(8.27, 11.69))
+    heights = [element.get("height", 1.0) for element in elements] or [1.0]
+    gs = fig.add_gridspec(len(heights) + 1, 1, height_ratios=[0.18] + heights)
+
+    ax_title = fig.add_subplot(gs[0])
+    ax_title.axis("off")
+    ax_title.text(0.5, 0.5, title, ha="center", va="center", fontsize=18, fontweight="bold")
+
+    for idx, element in enumerate(elements, start=1):
+        etype = element.get("type", "text")
+        ax = fig.add_subplot(gs[idx])
+
+        if etype == "text":
+            ax.axis("off")
+            lines = element.get("content", [])
+            fontsize = element.get("fontsize", 12)
+            line_height = element.get("line_height", 0.12)
+            y_pos = 0.95
+            for line in lines:
+                if not line:
+                    y_pos -= line_height
+                    continue
+                wrapped = textwrap.fill(line, width=95)
+                ax.text(0.02, y_pos, wrapped, ha="left", va="top", fontsize=fontsize)
+                y_pos -= line_height * max(1, wrapped.count("\n") + 1)
+        elif etype == "img":
+            path = element.get("path")
+            ax.axis("off")
+            if path and os.path.exists(path):
+                try:
+                    image = plt.imread(path)
+                    ax.imshow(image)
+                except Exception as exc:  # noqa: BLE001
+                    ax.text(
+                        0.5,
+                        0.5,
+                        f"Imagen no disponible ({exc})",
+                        ha="center",
+                        va="center",
+                        fontsize=11,
+                    )
+            else:
+                ax.text(0.5, 0.5, "Imagen no disponible", ha="center", va="center", fontsize=11)
+        elif etype == "table":
+            ax.axis("off")
+            data = element.get("data")
+            if data is None:
+                path = element.get("path")
+                data = _read_csv_table(path)
+            if data is None or data.empty:
+                ax.text(0.5, 0.5, "Tabla no disponible", ha="center", va="center", fontsize=11)
+            else:
+                max_rows = element.get("max_rows")
+                if max_rows is not None:
+                    data = data.head(max_rows)
+                data_to_show = data.copy()
+                round_digits = element.get("round", 3)
+                for col in data_to_show.columns:
+                    if pd.api.types.is_numeric_dtype(data_to_show[col]):
+                        data_to_show.loc[:, col] = data_to_show[col].round(round_digits)
+                cell_text = data_to_show.astype(str).values
+                col_labels = data_to_show.columns.tolist()
+                table = ax.table(cellText=cell_text, colLabels=col_labels, loc="center")
+                table.auto_set_font_size(False)
+                table.set_fontsize(element.get("fontsize", 10))
+                table.scale(1, element.get("row_scale", 1.2))
+        else:
+            ax.axis("off")
+            ax.text(0.5, 0.5, "Elemento no soportado", ha="center", va="center", fontsize=11)
+
+    fig.tight_layout(rect=(0.02, 0.02, 0.98, 0.98))
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+def _add_cover_page(pdf: PdfPages) -> None:
+    """Crea la diapositiva de portada de la presentación."""
+
+    fig, ax = plt.subplots(figsize=(8.27, 11.69))
+    ax.axis("off")
+    ax.text(
+        0.5,
+        0.75,
+        "Análisis de Congestión en Santiago",
+        ha="center",
+        va="center",
+        fontsize=26,
+        fontweight="bold",
+    )
+    lines = [
+        "Institución: Programa de Analítica de Datos",
+        "Curso: Minería de Datos",
+        "Equipo: Laboratorio de Movilidad Urbana",
+        f"Fecha: {datetime.now().strftime('%d/%m/%Y')}",
+    ]
+    y_pos = 0.55
+    for line in lines:
+        ax.text(0.5, y_pos, line, ha="center", va="center", fontsize=14)
+        y_pos -= 0.08
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+def generar_presentacion_pdf(
+    df: pd.DataFrame,
+    eda_outputs: Dict,
+    normalidad_outputs: Dict,
+    pca_outputs: Dict,
+    modelo1: Dict,
+    modelo2: Dict,
+    comparacion_outputs: Dict,
+    config: PipelineConfig,
+    numeric_features: List[str],
+    categorical_features: List[str],
+) -> str:
+    """Construye la presentación ejecutiva según la pauta especificada."""
+
+    LOGGER.info("Generando presentación PDF ...")
+    presentation_path = os.path.join(config.results_dir, "presentacion.pdf")
+
+    numeric_cols = eda_outputs.get("numeric_cols", [])
+    categorical_cols = eda_outputs.get("categorical_cols", [])
+
+    resumen_df = _read_csv_table(
+        os.path.join(config.results_dir, "tabla_resumen_numericas.csv"),
+        columns=["variable", "count", "mean", "std", "min", "median", "max", "skew"],
+        head=12,
+        round_map={"mean": 2, "std": 2, "min": 2, "median": 2, "max": 2, "skew": 2},
+    )
+    metrics_df = _read_csv_table(comparacion_outputs.get("metrics_path"))
+    vif_df = _read_csv_table(os.path.join(config.results_dir, "colinearidad_vif.csv"), head=12, round_map={"VIF": 2})
+    corr_pairs = eda_outputs.get("correlation_pairs", pd.DataFrame())
+
+    hist_target = "Velocidad km/h" if "Velocidad km/h" in numeric_cols else (numeric_cols[0] if numeric_cols else None)
+    hist_path = (
+        os.path.join(config.results_dir, f"hist_{sanitize_filename(hist_target)}.png")
+        if hist_target
+        else None
+    )
+
+    box_paths: List[str] = []
+    for col in numeric_cols:
+        path = os.path.join(config.results_dir, f"boxplot_{sanitize_filename(col)}.png")
+        if os.path.exists(path):
+            box_paths.append(path)
+        if len(box_paths) >= 2:
+            break
+
+    cat_paths: List[str] = []
+    for col in categorical_cols:
+        path = os.path.join(config.results_dir, f"categoricas_barras_{sanitize_filename(col)}.png")
+        if os.path.exists(path):
+            cat_paths.append(path)
+        if len(cat_paths) >= 2:
+            break
+
+    normal_figs = normalidad_outputs.get("figures", [])
+    qq_plot_path = normal_figs[0] if normal_figs else None
+    normal_test = normalidad_outputs.get("test_name", "Prueba")
+    normal_p = normalidad_outputs.get("p_value")
+    normal_target = normalidad_outputs.get("target_var", "variable")
+    if normal_p is not None:
+        decision = "no se rechaza" if float(normal_p) > 0.05 else "se rechaza"
+        normal_text = [
+            f"{normal_test} sobre {normal_target}: p={float(normal_p):.4f} → {decision} la normalidad (α=0.05)."
+        ]
+    else:
+        normal_text = ["No se pudo estimar la prueba de normalidad."]
+
+    faltantes_path = os.path.join(config.results_dir, "faltantes_bar.png")
+    heatmap_path = os.path.join(config.results_dir, "correlacion_heatmap.png")
+    pca_var_path = os.path.join(config.results_dir, "pca_varianza.png")
+    pca_biplot_path = os.path.join(config.results_dir, "pca_biplot.png")
+
+    comparacion_imgs: List[Dict[str, object]] = []
+    for key in ("y_vs_yhat_m1", "y_vs_yhat_m2", "residuos_m1", "residuos_m2"):
+        path = comparacion_outputs.get(key)
+        if path:
+            comparacion_imgs.append({"type": "img", "path": path, "height": 1.0})
+
+    with PdfPages(presentation_path) as pdf:
+        _add_cover_page(pdf)
+
+        intro_lines = [
+            "El preprocesamiento asegura tiempos consistentes y métricas comparables de congestión.",
+            "La EDA identifica patrones espaciales y horarios clave para comprender el tráfico.",
+            "Los modelos permiten cuantificar el impacto de cada factor en la velocidad promedio.",
+        ]
+        _add_pdf_page(pdf, "Introducción", [{"type": "text", "content": intro_lines, "line_height": 0.16}])
+
+        objetivos_lines = [
+            "• Integrar y limpiar los datos de congestión del 14/03/2025.",
+            "• Explorar variables críticas por comuna y horario.",
+            "• Resumir la información con PCA para entender patrones conjuntos.",
+            "• Ajustar y comparar dos modelos predictivos de velocidad.",
+        ]
+        _add_pdf_page(pdf, "Objetivos del estudio", [{"type": "text", "content": objetivos_lines, "line_height": 0.16}])
+
+        datos_df = pd.DataFrame(
+            [
+                ("Observaciones", len(df)),
+                ("Variables", df.shape[1]),
+                ("Numéricas", len(df.select_dtypes(include=[np.number]).columns)),
+                ("Categóricas", len(df.select_dtypes(exclude=[np.number]).columns)),
+            ],
+            columns=["Indicador", "Valor"],
+        )
+        _add_pdf_page(
+            pdf,
+            "Datos",
+            [
+                {
+                    "type": "table",
+                    "data": datos_df,
+                    "fontsize": 12,
+                    "row_scale": 1.3,
+                }
+            ],
+        )
+
+        cat_elements = [
+            {"type": "img", "path": path, "height": 1.0}
+            for path in cat_paths
+        ] or [
+            {"type": "text", "content": ["No se encontraron gráficos categóricos disponibles."]}
+        ]
+        _add_pdf_page(pdf, "Categóricas destacadas", cat_elements)
+
+        _add_pdf_page(
+            pdf,
+            "Resumen numérico",
+            [
+                {
+                    "type": "table",
+                    "data": resumen_df,
+                    "fontsize": 9,
+                    "row_scale": 1.1,
+                    "height": 1.4,
+                }
+            ],
+        )
+
+        hist_elements = [
+            {"type": "img", "path": hist_path, "height": 1.3}
+            if hist_path and os.path.exists(hist_path)
+            else {
+                "type": "text",
+                "content": ["No fue posible generar el histograma requerido."],
+            }
+        ]
+        _add_pdf_page(pdf, "Histograma y densidad", hist_elements)
+
+        normal_elements = [
+            {"type": "img", "path": qq_plot_path, "height": 1.2} if qq_plot_path else None,
+            {"type": "text", "content": normal_text, "line_height": 0.18},
+        ]
+        normal_elements = [element for element in normal_elements if element is not None]
+        _add_pdf_page(pdf, "Normalidad", normal_elements)
+
+        box_elements = [
+            {"type": "img", "path": path, "height": 1.0}
+            for path in box_paths
+        ] or [
+            {"type": "text", "content": ["Sin boxplots disponibles para analizar atípicos."]}
+        ]
+        _add_pdf_page(pdf, "Atípicos", box_elements)
+
+        _add_pdf_page(
+            pdf,
+            "Faltantes",
+            [
+                {"type": "img", "path": faltantes_path, "height": 1.3}
+                if os.path.exists(faltantes_path)
+                else {
+                    "type": "text",
+                    "content": ["No se generó el gráfico de faltantes."],
+                }
+            ],
+        )
+
+        corr_lines: List[str] = []
+        if isinstance(corr_pairs, pd.DataFrame) and not corr_pairs.empty:
+            top_corrs = (
+                corr_pairs.assign(abs_corr=corr_pairs["corr"].abs())
+                .sort_values("abs_corr", ascending=False)
+                .head(3)
+            )
+            for _, row in top_corrs.iterrows():
+                corr_lines.append(f"• {row['var1']} ↔ {row['var2']}: r={row['corr']:.2f}")
+        else:
+            corr_lines.append("No se identificaron correlaciones fuertes.")
+
+        _add_pdf_page(
+            pdf,
+            "Correlaciones y VIF",
+            [
+                {"type": "img", "path": heatmap_path, "height": 1.2}
+                if os.path.exists(heatmap_path)
+                else {
+                    "type": "text",
+                    "content": ["No se generó el mapa de calor."],
+                },
+                {"type": "text", "content": corr_lines, "line_height": 0.18},
+                {
+                    "type": "table",
+                    "data": vif_df,
+                    "fontsize": 9,
+                    "row_scale": 1.0,
+                    "height": 1.0,
+                },
+            ],
+        )
+
+        pca_lines = []
+        n_components = pca_outputs.get("n_components")
+        if n_components is not None:
+            pca_lines.append(f"• {n_components} componentes explican ≥95% de la varianza.")
+        var_95 = pca_outputs.get("varianza_acumulada_95")
+        if var_95 is not None:
+            pca_lines.append(f"• Varianza acumulada: {var_95:.1f}%.")
+
+        _add_pdf_page(
+            pdf,
+            "PCA",
+            [
+                {"type": "img", "path": pca_var_path, "height": 1.1}
+                if os.path.exists(pca_var_path)
+                else {"type": "text", "content": ["No se generó el scree plot."]},
+                {"type": "img", "path": pca_biplot_path, "height": 1.1}
+                if os.path.exists(pca_biplot_path)
+                else {"type": "text", "content": ["No se generó el biplot."]},
+                {"type": "text", "content": pca_lines, "line_height": 0.18},
+            ],
+        )
+
+        for label, model_dict in (("Modelo 1", modelo1), ("Modelo 2", modelo2)):
+            metrics = model_dict.get("metrics", {})
+            metric_lines = []
+            for key, value in metrics.items():
+                try:
+                    metric_lines.append(f"• {key}: {float(value):.3f}")
+                except Exception:  # noqa: BLE001
+                    continue
+            if not metric_lines:
+                metric_lines.append("• No se registraron métricas.")
+
+            metric_lines.insert(
+                0,
+                f"• Variables empleadas → num: {len(numeric_features)}, cat (OHE): {len(categorical_features)}.",
+            )
+
+            coef_df = model_dict.get("coef_df")
+            table_data = pd.DataFrame()
+            if coef_df is not None and not coef_df.empty:
+                working = coef_df[coef_df["variable"] != "const"].copy()
+                if not working.empty:
+                    working["abs_coef"] = working.get("coef", 0).abs()
+                    working.sort_values("abs_coef", ascending=False, inplace=True)
+                    display_cols = ["variable", "coef"]
+                    if model_dict.get("coef_source") == "ols" and "p_value" in working.columns:
+                        display_cols.extend(["p_value", "std_err"])
+                    table_data = working.head(8)[display_cols].copy()
+                    rename_map = {"variable": "Variable", "coef": "Coef"}
+                    if "p_value" in table_data.columns:
+                        rename_map["p_value"] = "p-valor"
+                    if "std_err" in table_data.columns:
+                        rename_map["std_err"] = "EE (HC1)"
+                    table_data.rename(columns=rename_map, inplace=True)
+                    for col in table_data.columns:
+                        if pd.api.types.is_numeric_dtype(table_data[col]):
+                            table_data.loc[:, col] = table_data[col].round(4)
+
+            if model_dict.get("coef_source") != "ols":
+                metric_lines.append("• Se recurrió a Ridge ante problemas de OLS.")
+            else:
+                metric_lines.append("• Coeficientes estimados con OLS y errores HC1.")
+
+            elements = [
+                {"type": "text", "content": metric_lines, "line_height": 0.16, "height": 0.9},
+                {
+                    "type": "table",
+                    "data": table_data,
+                    "fontsize": 9,
+                    "row_scale": 1.1,
+                    "height": 1.3,
+                },
+            ]
+            _add_pdf_page(pdf, label, elements)
+
+        comparacion_elements: List[Dict[str, object]] = []
+        if metrics_df is not None and not metrics_df.empty:
+            comparacion_elements.append(
+                {
+                    "type": "table",
+                    "data": metrics_df,
+                    "fontsize": 9,
+                    "row_scale": 1.0,
+                    "height": 1.0,
+                }
+            )
+        comparacion_elements.extend(comparacion_imgs[:2])
+        if not comparacion_elements:
+            comparacion_elements = [
+                {"type": "text", "content": ["No hubo elementos comparativos disponibles."]}
+            ]
+        _add_pdf_page(pdf, "Comparación de modelos", comparacion_elements)
+
+        def _fmt_metric(value: object) -> str:
+            try:
+                return f"{float(value):.3f}"
+            except Exception:  # noqa: BLE001
+                return "N/A"
+
+        rmse_m1_str = _fmt_metric(modelo1.get("metrics", {}).get("RMSE"))
+        rmse_m2_str = _fmt_metric(modelo2.get("metrics", {}).get("RMSE"))
+
+        conclusiones_lines = [
+            "• Se emplearon hora_sin/hora_cos eliminando hora_central y controlando colinealidad.",
+            "• Largo_km_log1p reemplazó a Largo km bruto dentro del modelado.",
+            f"• PCA resume el set en {pca_outputs.get('n_components', 'N/A')} componentes para ≥95% de varianza.",
+            f"• RMSE Modelo1: {rmse_m1_str}; Modelo2: {rmse_m2_str}.",
+            "• Persisten faltantes en horarios extremos; conviene reforzar captura de datos.",
+            "• Futuro: añadir clima/eventos y probar métodos no lineales.",
+        ]
+        _add_pdf_page(pdf, "Conclusiones", [{"type": "text", "content": conclusiones_lines, "line_height": 0.15}])
+
+        referencias_lines = [
+            "Jolliffe, I. T. (2002). Principal Component Analysis. Springer.",
+            "Hastie, T., Tibshirani, R., & Friedman, J. (2009). The Elements of Statistical Learning. Springer.",
+            "Shapiro, S. S., & Wilk, M. B. (1965). An analysis of variance test for normality. Biometrika.",
+            "Breusch, T. S., & Pagan, A. R. (1979). A simple test for heteroscedasticity. Econometrica.",
+            "Pedregosa, F., et al. (2011). Scikit-learn: Machine learning in Python. JMLR.",
+            "McCullagh, P., & Nelder, J. A. (1989). Generalized Linear Models. Chapman & Hall.",
+        ]
+        _add_pdf_page(pdf, "Referencias", [{"type": "text", "content": referencias_lines, "line_height": 0.14}])
+
+    LOGGER.info("[OK] Presentación PDF: %s", presentation_path)
+    return presentation_path
+
+
 # -----------------------------------------------------------------------------
 # 12. Flujo principal
 # -----------------------------------------------------------------------------
@@ -2538,6 +3015,22 @@ def main() -> None:
             config,
         )
 
+        presentacion_path = run_stage(
+            "generar_presentacion_pdf",
+            generar_presentacion_pdf,
+            stage_results,
+            df_clean,
+            eda_outputs,
+            normal_outputs,
+            pca_outputs,
+            modelo1,
+            modelo2,
+            comparacion,
+            config,
+            numeric_features,
+            categorical_features,
+        )
+
         LOGGER.info("Flujo completo finalizado con éxito.")
 
         eda_result = stage_results.get("eda")
@@ -2600,6 +3093,7 @@ def main() -> None:
                 LOGGER.info("[NOTE] No se generó archivo de VIF (ver mensajes previos).")
 
         LOGGER.info("[OK] Reporte PDF: %s", report_path)
+        LOGGER.info("[OK] Presentación PDF: %s", presentacion_path)
 
     except Exception as exc:  # noqa: BLE001
         LOGGER.exception("Error en la ejecución: %s", exc)
